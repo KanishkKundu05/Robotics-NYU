@@ -43,59 +43,64 @@ class InverseKinematics():
         self.target_joint_positions = None
         self.counter = 0
 
-        # Trotting gate positions
-        ################################################################################################
-        # TODO: Implement the trotting gait
-        ################################################################################################
-        touch_down_position = np.array([0,0,0])
-        stand_position_1 = np.array([0,0,0])
-        stand_position_2 = np.array([0,0,0])
-        stand_position_3 = np.array([0,0,0])
-        liftoff_position = np.array([0,0,0])
-        mid_swing_position = np.array([0,0,0])
+        # Trotting gait positions (relative, before adding leg offsets)
+        # Triangle: base width 0.10m along X at Z=-0.14, apex at Z=-0.05
+        touch_down_position = np.array([0.05, 0, -0.14])
+        stand_position_1 = np.array([0.025, 0, -0.14])
+        stand_position_2 = np.array([0, 0, -0.14])
+        stand_position_3 = np.array([-0.025, 0, -0.14])
+        liftoff_position = np.array([-0.05, 0, -0.14])
+        mid_swing_position = np.array([0, 0, -0.05])
         
         ## trotting
         # TODO: Implement each leg’s trajectory in the trotting gait.
         rf_ee_offset = np.array([0.06, -0.09, 0])
         rf_ee_triangle_positions = np.array([
-            ################################################################################################
-            # TODO: Implement the trotting gait
-            ################################################################################################
             touch_down_position,
+            stand_position_1,
+            stand_position_2,
+            stand_position_3,
+            liftoff_position,
+            mid_swing_position,
         ]) + rf_ee_offset
         
         lf_ee_offset = np.array([0.06, 0.09, 0])
         lf_ee_triangle_positions = np.array([
-            ################################################################################################
-            # TODO: Implement the trotting gait
-            ################################################################################################
+            stand_position_3,
+            liftoff_position,
+            mid_swing_position,
             touch_down_position,
+            stand_position_1,
+            stand_position_2,
         ]) + lf_ee_offset
-        
+
         rb_ee_offset = np.array([-0.11, -0.09, 0])
         rb_ee_triangle_positions = np.array([
-            ################################################################################################
-            # TODO: Implement the trotting gait
-            ################################################################################################
+            stand_position_3,
+            liftoff_position,
+            mid_swing_position,
             touch_down_position,
+            stand_position_1,
+            stand_position_2,
         ]) + rb_ee_offset
         
         lb_ee_offset = np.array([-0.11, 0.09, 0])
         lb_ee_triangle_positions = np.array([
-            ################################################################################################
-            # TODO: Implement the trotting gait
-            ################################################################################################
             touch_down_position,
+            stand_position_1,
+            stand_position_2,
+            stand_position_3,
+            liftoff_position,
+            mid_swing_position,
         ]) + lb_ee_offset
 
 
         self.ee_triangle_positions = [rf_ee_triangle_positions, lf_ee_triangle_positions, rb_ee_triangle_positions, lb_ee_triangle_positions]
         self.fk_functions = [self.fr_leg_fk, self.fl_leg_fk, self.br_leg_fk, self.bl_leg_fk]
 
-        ####### TODO: Uncomment when you want to generate the cache #######
-        #self.target_joint_positions_cache, self.target_ee_cache = self.cache_target_joint_positions()
-        #print(f'shape of target_joint_positions_cache: {self.target_joint_positions_cache.shape}')
-        #print(f'shape of target_ee_cache: {self.target_ee_cache.shape}')
+        self.target_joint_positions_cache, self.target_ee_cache = self.cache_target_joint_positions()
+        print(f'shape of target_joint_positions_cache: {self.target_joint_positions_cache.shape}')
+        print(f'shape of target_ee_cache: {self.target_ee_cache.shape}')
 
 
     def fr_leg_fk(self, theta):
@@ -134,42 +139,50 @@ class InverseKinematics():
         return np.concatenate([self.fk_functions[i](theta[3*i: 3*i+3]) for i in range(4)])
         
     def get_error_leg(self, theta, desired_position):
-        ################################################################################################
-        # TODO: [already done] paste lab 3 inverse kinematics here
-        ################################################################################################
-        return 0
+        current_position = self.leg_forward_kinematics(theta)
+        error = np.linalg.norm(current_position - desired_position)
+        return error
 
     def inverse_kinematics_single_leg(self, target_ee, leg_index, initial_guess=[0, 0, 0]):
         self.leg_forward_kinematics = self.fk_functions[leg_index]
-        ################################################################################################
-        # TODO: implement interpolation for all 4 legs here
-        ################################################################################################
-        return 0
+        result = scipy.optimize.minimize(self.get_error_leg, initial_guess, args=(target_ee,))
+        return result.x
 
     def interpolate_triangle(self, t, leg_index):
-        ################################################################################################
-        # TODO: implement interpolation for all 4 legs here
-        ################################################################################################
-        return 0
+        positions = self.ee_triangle_positions[leg_index]
+        n = len(positions)
+        # Divide t into n equal segments (one per edge of the closed triangle path)
+        segment = t * n
+        segment_index = int(segment)
+        if segment_index >= n:
+            segment_index = n - 1
+        local_t = segment - segment_index
+
+        start = positions[segment_index]
+        end = positions[(segment_index + 1) % n]
+        return start + local_t * (end - start)
 
     def cache_target_joint_positions(self):
         # Calculate and store the target joint positions for a cycle and all 4 legs
-        target_joint_positions_cache = []
-        target_ee_cache = []
+        all_joint_positions = []
+        all_ee_positions = []
         for leg_index in range(4):
-            target_joint_positions_cache.append([])
-            target_ee_cache.append([])
-            target_joint_positions = [0] * 3
+            leg_joints = []
+            leg_ee = []
+            initial_guess = [0, 0, 0]
             for t in np.arange(0, 1, 0.02):
                 target_ee = self.interpolate_triangle(t, leg_index)
-                target_joint_positions = self.inverse_kinematics_single_leg(target_ee, leg_index, initial_guess=target_joint_positions)
-                target_joint_positions_cache[leg_index].append(target_joint_positions)
-                target_ee_cache[leg_index].append(target_ee)
+                joint_pos = self.inverse_kinematics_single_leg(target_ee, leg_index, initial_guess=initial_guess)
+                initial_guess = joint_pos
+                leg_joints.append(joint_pos)
+                leg_ee.append(target_ee)
+            all_joint_positions.append(np.array(leg_joints))   # (50, 3)
+            all_ee_positions.append(np.array(leg_ee))           # (50, 3)
 
-        # (4, 50, 3) -> (50, 12)
-        target_joint_positions_cache = np.concatenate(target_joint_positions_cache, axis=1)
-        target_ee_cache = np.concatenate(target_ee_cache, axis=1)
-        
+        # Concatenate per-leg arrays: 4 x (50, 3) -> (50, 12)
+        target_joint_positions_cache = np.concatenate(all_joint_positions, axis=1)
+        target_ee_cache = np.concatenate(all_ee_positions, axis=1)
+
         return target_joint_positions_cache, target_ee_cache
 
     def get_target_joint_positions(self):
@@ -220,16 +233,17 @@ def main():
         plt.title('End Effector X position')
         plt.show()
 
-    # Plot the cached trot gait path for one foot.
+    # Plot the cached trot gait path for front left foot.
+    # target_ee_cache shape: (50, 12) -> [RF_x, RF_y, RF_z, LF_x, LF_y, LF_z, RB_x, ...]
     if len(inverse_kinematics.target_ee_cache):
         x_list = []
         z_list = []
         for position in inverse_kinematics.target_ee_cache:
-            x_list.append(position[0])
-            z_list.append(position[2])
+            x_list.append(position[3])   # LF X
+            z_list.append(position[5])   # LF Z
         plt.xlabel('X(m)')
         plt.ylabel('Z(m)')
-        plt.title('EE front right foot trot gait')
+        plt.title('EE front left foot trot gait')
         plt.plot(x_list, z_list)
         plt.show()
 

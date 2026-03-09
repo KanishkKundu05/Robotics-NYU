@@ -1,0 +1,235 @@
+================================================================================
+LAB 3 - INVERSE KINEMATICS: CODE EXPLANATION
+================================================================================
+
+This file explains each sub-task implemented in lab_3_playground.py (and
+mirrored in lab_3.py for the real robot).
+
+================================================================================
+SECTION 1: INVERSE KINEMATICS
+================================================================================
+
+SUB-TASK 1A: get_error_leg()
+--------------------------------------------------------------------------------
+File: lab_3_playground.py, lines 141-144
+
+    def get_error_leg(self, theta, desired_position):
+        current_position = self.leg_forward_kinematics(theta)
+        error = np.linalg.norm(current_position - desired_position)
+        return error
+
+What it does:
+  - Takes a set of 3 joint angles (theta) and a desired [X, Y, Z] position.
+  - Runs the FORWARD kinematics (FK) to compute where those joint angles would
+    actually place the foot in 3D space.
+  - Computes the Euclidean distance (straight-line distance) between the FK
+    result and the desired position.
+  - Returns this scalar error value.
+
+Why it matters:
+  - This is the "cost function" that the optimizer will try to minimize.
+  - When the error is 0, the joint angles perfectly reach the desired position.
+  - np.linalg.norm computes: sqrt((x1-x2)^2 + (y1-y2)^2 + (z1-z2)^2)
+
+
+SUB-TASK 1B: inverse_kinematics_single_leg()
+--------------------------------------------------------------------------------
+File: lab_3_playground.py, lines 146-149
+
+    def inverse_kinematics_single_leg(self, target_ee, leg_index, initial_guess=[0, 0, 0]):
+        self.leg_forward_kinematics = self.fk_functions[leg_index]
+        result = scipy.optimize.minimize(self.get_error_leg, initial_guess, args=(target_ee,))
+        return result.x
+
+What it does:
+  - Sets which leg's FK function to use (leg_index: 0=RF, 1=LF, 2=RB, 3=LB).
+  - Calls scipy.optimize.minimize, which is a numerical optimizer. It searches
+    for the joint angles (theta) that MINIMIZE the error function from 1A.
+  - initial_guess gives the optimizer a starting point. Using the previous
+    solution as a guess speeds up convergence for nearby targets.
+  - result.x contains the optimal 3 joint angles [theta1, theta2, theta3].
+
+Why it matters:
+  - This is the core of inverse kinematics. Forward kinematics goes
+    "angles -> position". Inverse kinematics goes "position -> angles".
+  - Since there's no closed-form analytical solution for this robot's geometry,
+    we use numerical optimization to solve it iteratively.
+
+
+SUB-TASK 1C: IK Validation (in main())
+--------------------------------------------------------------------------------
+File: lab_3_playground.py, lines 207-221
+
+The main() function tests IK on 11 front-right leg positions where X goes from
+0.11 down to 0.01 (Y=-0.09, Z=-0.14 are constant). For each target:
+  1. Run IK to get joint angles
+  2. Run FK on those angles to verify we reach the target
+  3. Plot target vs. result (should overlap perfectly)
+
+Result: All 11 test positions achieved 0.000000 error.
+
+
+================================================================================
+SECTION 2: TROTTING GAIT
+================================================================================
+
+SUB-TASK 2A: Triangle Waypoints
+--------------------------------------------------------------------------------
+File: lab_3_playground.py, lines 46-53
+
+    touch_down_position = np.array([0.05, 0, -0.14])
+    stand_position_1   = np.array([0.025, 0, -0.14])
+    stand_position_2   = np.array([0, 0, -0.14])
+    stand_position_3   = np.array([-0.025, 0, -0.14])
+    liftoff_position   = np.array([-0.05, 0, -0.14])
+    mid_swing_position = np.array([0, 0, -0.05])
+
+What it does:
+  - Defines 6 waypoints that form a TRIANGLE foot path in the X-Z plane.
+  - Y = 0 for all (the Y offset comes from each leg's ee_offset later).
+  - The BOTTOM EDGE (stance phase): 5 points along Z = -0.14 (ground level),
+    spanning X from +0.05 to -0.05 (total width = 0.10m).
+  - The APEX (swing phase): 1 point at [0, 0, -0.05], which is 0.09m above
+    the ground level (triangle height = 0.09m).
+
+The triangle path in order:
+
+    mid_swing [0, 0, -0.05]        <-- apex (foot highest point)
+         /\
+        /  \
+       /    \
+      /      \
+     /________\
+  touch_down    liftoff
+  [0.05,0,-0.14]  [-0.05,0,-0.14]
+
+  Bottom edge (stance): touch_down -> stand_1 -> stand_2 -> stand_3 -> liftoff
+  Swing up:             liftoff -> mid_swing
+  Swing down:           mid_swing -> touch_down (wraps around)
+
+Why it matters:
+  - During STANCE (bottom edge), the foot is on the ground pushing backward,
+    which propels the robot forward.
+  - During SWING (up to apex and back down), the foot lifts off the ground,
+    swings forward through the air, and touches back down.
+
+
+SUB-TASK 2B: Per-Leg Triangle Positions with Offsets
+--------------------------------------------------------------------------------
+File: lab_3_playground.py, lines 57-95
+
+Each leg gets the SAME triangle waypoints, but shifted by its leg offset:
+
+    rf_ee_offset = [0.06, -0.09, 0]    # Right-Front: forward and right
+    lf_ee_offset = [0.06,  0.09, 0]    # Left-Front: forward and left
+    rb_ee_offset = [-0.11, -0.09, 0]   # Right-Back: backward and right
+    lb_ee_offset = [-0.11,  0.09, 0]   # Left-Back: backward and left
+
+The offset positions the triangle relative to each leg's hip joint in the
+robot's body frame. For example, the front-right leg's triangle is centered
+around X=0.06, Y=-0.09 (the hip location of that leg).
+
+
+SUB-TASK 2C: interpolate_triangle()
+--------------------------------------------------------------------------------
+File: lab_3_playground.py, lines 151-168
+
+    def interpolate_triangle(self, t, leg_index):
+        # Phase offset for trotting: diagonal legs in sync
+        if leg_index == 1 or leg_index == 2:
+            t = (t + 0.5) % 1.0
+
+        positions = self.ee_triangle_positions[leg_index]
+        n = len(positions)  # 6 waypoints
+        segment = t * n
+        segment_index = int(segment)
+        if segment_index >= n:
+            segment_index = n - 1
+        local_t = segment - segment_index
+
+        start = positions[segment_index]
+        end = positions[(segment_index + 1) % n]
+        return start + local_t * (end - start)
+
+What it does:
+  - Takes parameter t (0.0 to 1.0) representing progress through one gait cycle,
+    and leg_index (0-3).
+
+  STEP 1 - TROTTING PHASE OFFSET:
+    - In a trot, DIAGONAL legs move together:
+        RF (index 0) + LB (index 3) = one pair (no offset)
+        LF (index 1) + RB (index 2) = other pair (offset by 0.5)
+    - When one pair has its feet on the ground (stance), the other pair is
+      in the air (swing), and vice versa.
+    - Adding 0.5 to t and taking modulo 1.0 shifts the phase by half a cycle.
+
+  STEP 2 - LINEAR INTERPOLATION:
+    - The 6 waypoints divide the cycle into 6 equal segments.
+    - Each segment covers 1/6 of the t range (0.1667).
+    - segment_index tells us WHICH segment we're in (0-5).
+    - local_t tells us HOW FAR through that segment (0.0 to 1.0).
+    - Linear interpolation: result = start + local_t * (end - start)
+    - The path wraps around: after waypoint 5 (mid_swing), it goes back
+      to waypoint 0 (touch_down).
+
+Example with t = 0.25:
+    segment = 0.25 * 6 = 1.5
+    segment_index = 1 (we're in segment 1: stand_1 -> stand_2)
+    local_t = 0.5 (halfway through this segment)
+    result = stand_1 + 0.5 * (stand_2 - stand_1) = midpoint between them
+
+
+SUB-TASK 2D: cache_target_joint_positions()
+--------------------------------------------------------------------------------
+File: lab_3_playground.py, lines 170-188 (provided, not modified)
+
+What it does:
+  - Pre-computes joint angles for the ENTIRE gait cycle for ALL 4 legs.
+  - Loops through t = 0, 0.02, 0.04, ..., 0.98 (50 steps) for each leg.
+  - At each step:
+      1. interpolate_triangle(t, leg) -> target XYZ position
+      2. inverse_kinematics_single_leg(target) -> 3 joint angles
+  - Uses the previous IK solution as initial_guess for the next step
+    (warm-starting makes convergence faster and smoother).
+  - Final shape: (50, 12) -- 50 timesteps x 12 joint angles (3 per leg x 4 legs).
+
+Why it matters:
+  - IK is computationally expensive (runs optimizer each call).
+  - Pre-computing all positions at startup means the real-time loop just
+    reads from the cache -- no optimization delay during walking.
+
+
+================================================================================
+SECTION 3: HARDWARE (not code -- done in lab)
+================================================================================
+
+  - Run `lab_3.launch.py` to start the ROS2 controllers on the Pupper robot.
+  - Run `lab_3.py` which is the ROS2 node version of the same code.
+  - The node publishes target joint positions at 200 Hz to the robot's
+    forward command controller.
+  - The IK timer runs at 100 Hz, cycling through the cached gait positions.
+  - Test on support structure first, then on the ground.
+
+
+================================================================================
+SECTION 4: ROTATION CHALLENGE (optional)
+================================================================================
+
+  - Design a gait where the left and right legs move in opposite X directions
+    to create a yaw rotation.
+  - This would involve modifying the triangle waypoints or offsets per leg
+    so that one side pushes forward while the other pushes backward.
+
+
+================================================================================
+HOW THE PIECES FIT TOGETHER
+================================================================================
+
+  1. At startup, __init__() defines waypoints and builds the cache.
+  2. cache_target_joint_positions() calls interpolate_triangle() and
+     inverse_kinematics_single_leg() for all timesteps and legs.
+  3. During walking, get_target_joint_positions() cycles through the cache,
+     returning the next set of 12 joint angles.
+  4. The ROS2 node (lab_3.py) publishes these angles to the robot motors.
+
+  Flow: Triangle waypoints -> Interpolation -> IK solver -> Joint angles -> Robot
