@@ -164,25 +164,20 @@ class InverseKinematics():
 
     def cache_target_joint_positions(self):
         # Calculate and store the target joint positions for a cycle and all 4 legs
-        all_joint_positions = []
-        all_ee_positions = []
+        target_joint_positions_cache = []
+        target_ee_cache = []
         for leg_index in range(4):
-            leg_joints = []
-            leg_ee = []
-            initial_guess = [0, 0, 0]
+            target_joint_positions_cache.append([])
+            target_ee_cache.append([])
+            target_joint_positions = [0] * 3
             for t in np.arange(0, 1, 0.02):
-                target_ee = self.interpolate_triangle(t, leg_index)
-                joint_pos = self.inverse_kinematics_single_leg(target_ee, leg_index, initial_guess=initial_guess)
-                initial_guess = joint_pos
-                leg_joints.append(joint_pos)
-                leg_ee.append(target_ee)
-            all_joint_positions.append(np.array(leg_joints))   # (50, 3)
-            all_ee_positions.append(np.array(leg_ee))           # (50, 3)
-
-        # Concatenate per-leg arrays: 4 x (50, 3) -> (50, 12)
-        target_joint_positions_cache = np.concatenate(all_joint_positions, axis=1)
-        target_ee_cache = np.concatenate(all_ee_positions, axis=1)
-
+                target_joint_positions = self.inverse_kinematics_single_leg(target_ee, leg_index, initial_guess=target_joint_positions)
+                target_joint_positions_cache[leg_index].append(target_joint_positions)
+                target_ee_cache[leg_index].append(target_ee)
+             # (4, 50, 3) -> (50, 12)
+        target_joint_positions_cache = np.concatenate(target_joint_positions_cache, axis=1)
+        target_ee_cache = np.concatenate(target_ee_cache, axis=1)
+        
         return target_joint_positions_cache, target_ee_cache
 
     def get_target_joint_positions(self):
@@ -239,8 +234,8 @@ def main():
         x_list = []
         z_list = []
         for position in inverse_kinematics.target_ee_cache:
-            x_list.append(position[3])   # LF X
-            z_list.append(position[5])   # LF Z
+            x_list.append(position[0])   # LF X
+            z_list.append(position[2])   # LF Z
         plt.xlabel('X(m)')
         plt.ylabel('Z(m)')
         plt.title('EE front left foot trot gait')
